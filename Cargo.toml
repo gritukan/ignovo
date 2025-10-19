@@ -1,0 +1,17 @@
+[package]
+name = "novoseq"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.100"
+clap = { version = "4.5.48", features = ["derive"] }
+mzdata = { version = "0.59.2", features = ["serde", "thermo"] }
+mzdeisotope = { version = "0.3.3", features = ["serde"] }
+ordered-float = "5.1.0"
+rayon = "1.11.0"
+rustyms = { git = "https://github.com/gritukan/mzcore", branch = "alignment_fixes" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0"
+serde_path_to_error = "0.1.20"
+serde_yaml = "0.9.34"
