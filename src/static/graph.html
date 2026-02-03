@@ -1,0 +1,740 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>ignovo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #0b0f12;
+      --panel: #11161c;
+      --fg: #e6edf3;
+      --muted: #9fb1c5;
+      --accent: #4ad3ff;
+      --edge: #7aa5ff;
+      --peak: #93a1a1;
+      --port: #e2b714;
+      --sel: #ffd166;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+    }
+
+    .layout { display: grid; grid-template-columns: 1fr 320px; gap: 12px; padding: 12px 16px 24px; }
+    .frame {
+      background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.00));
+      border: 1px solid #1f2a35;
+      border-radius: 12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.05);
+      padding: 8px;
+    }
+    .title { font-weight: 600; font-size: 14px; color: var(--muted); margin: 6px 0 10px 6px; grid-column: 1 / -1; }
+
+    svg {
+      width: 100%;
+      height: 640px;
+      display: block;
+      background: var(--panel);
+      border-radius: 10px;
+    }
+    .axis path, .axis line { stroke: #314457; }
+    .axis text { fill: var(--muted); font-size: 12px; }
+    .grid line { stroke: rgba(255,255,255,0.07); }
+    .peak { stroke: var(--peak); stroke-width: 2px; }
+    .peak.selected { stroke: #fff; stroke-width: 3px; }
+    .cap { fill: var(--fg); opacity: 0.9; pointer-events: none; }
+    .cap.selected { r: 4.5; }
+    .edge { stroke: var(--edge); fill: none; stroke-width: 2px; opacity: 0.95; }
+    .edge.selected { stroke: var(--sel); stroke-width: 4px; opacity: 1; filter: drop-shadow(0 0 6px rgba(255, 209, 102, 0.5)); }
+    .edge:hover { stroke: var(--accent); filter: drop-shadow(0 0 6px rgba(74, 211, 255, 0.6)); }
+
+    .edge-label { font-size: 12px; fill: var(--muted); pointer-events: none; user-select: none; }
+    .edge-label.selected { fill: var(--sel); font-weight: 600; }
+    .edge-note  { font-size: 11px; fill: var(--muted); opacity: 0.95; pointer-events: none; user-select: none; }
+
+    .tooltip {
+      position: fixed; pointer-events: none; background: rgba(15,22,29,0.96); color: var(--fg);
+      border: 1px solid #2a3a4b; padding: 6px 8px; font-size: 12px; border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35); opacity: 0; transform: translate(-50%, -120%);
+      transition: opacity 0.08s ease-out; max-width: 320px; white-space: nowrap;
+    }
+
+    .controls { display: flex; gap: 10px; align-items: center; margin: 8px 0 6px 6px; flex-wrap: wrap; }
+    .btn { background: #1a2633; color: var(--fg); border: 1px solid #263648; border-radius: 8px; padding: 6px 10px;
+           cursor: pointer; font-size: 12px; }
+    .btn:hover { background: #203042; }
+    .chk label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+    select, input[type="file"] { background: #1a2633; color: var(--fg); border: 1px solid #263648; border-radius: 8px; padding: 5px 8px; font-size: 12px; }
+
+    /* Sidebar */
+    .side { display: flex; flex-direction: column; gap: 10px; }
+    .panel { background: #0f151c; border: 1px solid #1f2a35; border-radius: 10px; padding: 10px; }
+    .panel h3 { margin: 0 0 8px 0; font-size: 13px; color: var(--muted); font-weight: 600; }
+    .list { display: grid; gap: 6px; max-height: 280px; overflow: auto; }
+    .item { background: #0e131a; border: 1px solid #1b2836; border-radius: 8px; padding: 6px 8px; font-size: 12px; display: flex; justify-content: space-between; gap: 8px; }
+    .item .left { display: grid; gap: 2px; }
+    .item .right { display: grid; gap: 4px; align-content: center; }
+    .small { color: var(--muted); font-size: 11px; }
+    .input-row { display: grid; grid-template-columns: 1fr; gap: 6px; }
+    .input-row input, .input-row textarea { width: 100%; background: #0f1620; color: var(--fg); border: 1px solid #263648; border-radius: 6px; padding: 6px 8px; font-size: 12px; }
+    .tag { display: inline-block; padding: 1px 6px; border-radius: 6px; background: #0f202f; border: 1px solid #284156; font-size: 11px; color: var(--muted); }
+
+    @media (max-width: 1024px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+
+    /* keep stroke thickness constant under any outer CSS scaling */
+    #chart .edge,
+    #chart .peak,
+    #chart .axis line,
+    #chart .grid line { vector-effect: non-scaling-stroke; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <div class="title">m/z graph workspace — peaks + arcs. Scroll to zoom, drag to pan. Click edges/peaks to select.</div>
+
+    <div class="frame">
+      <div class="controls">
+        <button id="reset" class="btn">Reset view</button>
+        <span class="chk"><label><input id="logY" type="checkbox" /> Log Y (symlog)</label></span>
+        <span style="color:var(--muted);font-size:12px;">Zoom mode:</span>
+        <select id="zoomMode">
+          <option value="x" selected>X only</option>
+          <option value="xy">XY</option>
+          <option value="y">Y only</option>
+        </select>
+
+        <!-- Export controls -->
+        <span style="color:var(--muted);font-size:12px;">Export:</span>
+        <button id="exportPNG" class="btn">PNG</button>
+        <button id="exportSVG" class="btn">SVG</button>
+        <span style="color:var(--muted);font-size:12px;">Scale:</span>
+        <select id="pngScale">
+          <option value="1">1×</option>
+          <option value="2" selected>2×</option>
+          <option value="3">3×</option>
+          <option value="4">4×</option>
+        </select>
+        <span class="chk"><label><input id="whiteBg" type="checkbox" /> White BG</label></span>
+
+        <span style="flex:1 1 auto"></span>
+
+        <button id="saveWs" class="btn">Save workspace</button>
+        <button id="loadWsBtn" class="btn">Load workspace</button>
+        <input id="loadWs" type="file" accept="application/json" style="display:none;" />
+      </div>
+      <svg id="chart" viewBox="0 0 1200 640" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+
+    <div class="side">
+      <div class="panel">
+        <h3>Peptide (from selected edges)</h3>
+        <div id="peptide" class="tag">–</div>
+      </div>
+
+      <div class="panel">
+        <h3>Selected edges <span id="seCount" class="small">(0)</span></h3>
+        <div id="selEdges" class="list"></div>
+      </div>
+
+      <div class="panel">
+        <h3>Selected peaks <span id="spCount" class="small">(0)</span></h3>
+        <div id="selPeaks" class="list"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="tooltip" class="tooltip"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <script>
+  let graph = __GRAPH_JSON__;
+
+  const svg = d3.select("#chart");
+  const tooltip = d3.select("#tooltip");
+  const width = 1200, height = 640;
+  const margin = {top: 28, right: 24, bottom: 40, left: 60};
+  const innerW = width - margin.left - margin.right;
+  const innerH = height - margin.top - margin.bottom;
+
+  // Root group (chart area)
+  const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+  // ClipPath to keep everything inside the plotting area
+  const clip = g.append("clipPath").attr("id", "clip-rect");
+  clip.append("rect").attr("x", 0).attr("y", 0).attr("width", innerW).attr("height", innerH);
+
+  // Layers (clipped)
+  const gGrid  = g.append("g").attr("class", "grid");
+  const gEdges = g.append("g").attr("class", "edges").attr("clip-path", "url(#clip-rect)");
+  const gPeaks = g.append("g").attr("class", "peaks").attr("clip-path", "url(#clip-rect)");
+  const gAnno  = gPeaks.append("g").attr("class", "peak-annotations").attr("clip-path", "url(#clip-rect)");
+  const xAxisG = g.append("g").attr("class", "axis").attr("transform", `translate(0,${innerH})`);
+  const yAxisG = g.append("g").attr("class", "axis");
+
+  // Data helpers
+  let masses = graph.peaks.map(p => p.mass);
+  let intens = graph.peaks.map(p => p.intensity);
+  let maxI   = d3.max(intens) || 1;
+
+  // Base (unzoomed) scales
+  const xBase = d3.scaleLinear().domain(d3.extent(masses)).range([0, innerW]).nice();
+  let yBase = makeYScale(false); // linear by default
+
+  // Current (zoomed) scales
+  let xCur = xBase.copy();
+  let yCur = yBase.copy();
+
+  // UI state
+  let logMode = false;
+  let zoomMode = "x"; // default X-only
+
+  // Selections, annotations
+  const selectedEdges = new Set(); // indices into graph.edges
+  const selectedPeaks = new Set(); // masses (number)
+  const annotations = { edges: {}, peaks: {} }; // edges: {idx:{aa,note}}, peaks: {mass:{note}}
+
+  // Build endpoint port mapping (for distributing many edges along stick height)
+  const massToPeak = new Map(graph.peaks.map(p => [p.mass, p]));
+  const edgesAt = new Map(); // mass -> [{idx, other}]
+  graph.edges.forEach((e, i) => {
+    for (const m of [e.from_mass, e.to_mass]) {
+      if (!edgesAt.has(m)) edgesAt.set(m, []);
+      edgesAt.get(m).push({ idx: i, other: (m === e.from_mass) ? e.to_mass : e.from_mass });
+    }
+  });
+  edgesAt.forEach((arr, m) => arr.sort((a,b) => a.other - b.other));
+
+  // ---- Elements ----
+  // Augment datum with stable __idx to avoid selection drift
+  const edgesData = graph.edges.map((e, i) => Object.assign({ __idx: i }, e));
+
+  const peakLines = gPeaks.selectAll("line.peak")
+    .data(graph.peaks)
+    .join("line")
+      .attr("class", "peak");
+
+  const caps = gPeaks.selectAll("circle.cap")
+    .data(graph.peaks)
+    .join("circle")
+      .attr("class", "cap")
+      .attr("r", 3);
+
+  // Robust width scale for edges
+  const vals = edgesData.map(d => Math.max(0, +d.value || 0)).sort(d3.ascending);
+  const vmin = vals.length ? d3.quantileSorted(vals, 0.02) : 0;
+  const vmax = vals.length ? d3.quantileSorted(vals, 0.98) : 1;
+
+  // Use sqrt so a few large values don't dominate; clamp to a tidy range.
+  const edgeWidthScale = (vmax - vmin < 1e-12)
+    ? (() => 3) // constant width if all values ~ equal
+    : d3.scaleSqrt().domain([vmin, vmax]).range([2, 5.5]).clamp(true);
+
+  const edgePaths = gEdges.selectAll("path.edge")
+    .data(edgesData)
+    .join("path")
+      .attr("class", "edge")
+      .attr("id", (d) => `edge-path-${d.__idx}`)
+      .style("stroke-width", d => edgeWidthScale(+d.value))
+      .on("click", (evt, d) => { toggleEdgeSelection(d.__idx); });
+
+  // Straight (non-rotated) labels + optional notes
+  const edgeLabels = gEdges.selectAll("text.edge-label")
+    .data(edgesData)
+    .join("text")
+      .attr("class", "edge-label")
+      .text(d => edgeAA(d.__idx));
+
+  const edgeNotes = gEdges.selectAll("text.edge-note")
+    .data(edgesData)
+    .join("text")
+      .attr("class", "edge-note")
+      .text(d => annotations.edges[d.__idx]?.note || "")
+      .attr("display", d => annotations.edges[d.__idx]?.note ? null : "none");
+
+  // Grid + axes (initial)
+  renderAxes();
+
+  // Hover tooltips
+  caps.on("mouseenter", (evt,d) => {
+      const note = annotations.peaks[d.mass]?.note;
+      showTip(`<b>${d.label}</b><br/>m/z: ${d.mass.toFixed(4)}<br/>Intensity: ${d.intensity.toFixed(2)}${note ? `<br/><i>${escapeHtml(note)}</i>` : ""}`, evt);
+    }).on("mousemove", moveTip).on("mouseleave", hideTip)
+    .on("click", (evt,d) => { togglePeakSelection(d.mass); });
+
+  peakLines.on("mouseenter", (evt,d) => {
+      const note = annotations.peaks[d.mass]?.note;
+      showTip(`<b>${d.label}</b><br/>m/z: ${d.mass.toFixed(4)}<br/>Intensity: ${d.intensity.toFixed(2)}${note ? `<br/><i>${escapeHtml(note)}</i>` : ""}`, evt);
+    }).on("mousemove", moveTip).on("mouseleave", hideTip)
+    .on("click", (evt,d) => { togglePeakSelection(d.mass); });
+
+  edgePaths.on("mouseenter", (evt, d) => {
+      const delta = (d.to_mass - d.from_mass);
+      const anno = annotations.edges[d.__idx];
+      d3.select(evt.currentTarget).classed("hover", true).raise();
+      showTip(`<b>${edgeAA(d.__idx)}</b><br/>Δm/z: ${delta.toFixed(4)}<br/>value: ${d.value}${anno?.note ? `<br/><i>${escapeHtml(anno.note)}</i>` : ""}`, evt);
+    }).on("mousemove", moveTip)
+      .on("mouseleave", (evt) => { d3.select(evt.currentTarget).classed("hover", false); hideTip(); });
+
+  // Zoom behavior
+  const zoom = d3.zoom()
+    .scaleExtent([1, 1e6])
+    .translateExtent([[-innerW*100, -innerH*100], [innerW*101, innerH*101]])
+    .extent([[0,0],[innerW,innerH]])
+    .on("zoom", (event) => {
+      const t = event.transform;
+
+      function rescaleXTranslateOnly() {
+        const x0 = xBase.invert(-t.x);
+        const x1 = xBase.invert(innerW - t.x);
+        return d3.scaleLinear().domain([x0, x1]).range([0, innerW]);
+      }
+
+      if (zoomMode === "xy") {
+        xCur = t.rescaleX(xBase);
+        yCur = t.rescaleY(yBase);
+      } else if (zoomMode === "x") {
+        xCur = t.rescaleX(xBase);
+      } else if (zoomMode === "y") {
+        xCur = rescaleXTranslateOnly();   // pan horizontally
+        yCur = t.rescaleY(yBase);         // zoom/pan vertically
+      }
+
+      renderAxes();
+      renderPeaksAndEdges();
+      renderPeakAnnotations();
+      updateSelectionStyling();
+    });
+
+  svg.call(zoom);
+  svg.on("click", hideTip);
+  document.getElementById("zoomMode").value = "x"; // default X-only
+
+  // Optional: SHIFT + wheel => horizontal pan in Y-only mode
+  svg.on("wheel.panX", (event) => {
+    if (zoomMode === "y" && event.shiftKey) {
+      event.preventDefault();
+      svg.call(zoom.translateBy, -event.deltaY, 0);
+    }
+  });
+
+  // UI controls
+  document.getElementById("reset").addEventListener("click", () => {
+    xCur = xBase.copy();
+    yBase = makeYScale(logMode);
+    yCur = yBase.copy();
+    svg.transition().duration(200).call(zoom.transform, d3.zoomIdentity);
+    renderAxes();
+    renderPeaksAndEdges();
+    renderPeakAnnotations();
+    updateSelectionStyling();
+  });
+
+  document.getElementById("logY").addEventListener("change", (e) => {
+    logMode = e.target.checked;
+    const curDom = yCur.domain();
+    yBase = makeYScale(logMode).domain(curDom);
+    yCur = yBase.copy();
+    renderAxes();
+    renderPeaksAndEdges();
+    renderPeakAnnotations();
+  });
+
+  document.getElementById("zoomMode").addEventListener("change", (e) => {
+    zoomMode = e.target.value;
+  });
+
+  // ---------- Export: PNG / SVG ----------
+  document.getElementById("exportPNG").addEventListener("click", () => {
+    const scale = parseFloat(document.getElementById("pngScale").value || "2");
+    const white = document.getElementById("whiteBg").checked;
+    exportPNG(scale, white);
+  });
+  document.getElementById("exportSVG").addEventListener("click", () => {
+    const white = document.getElementById("whiteBg").checked;
+    const { svgString } = buildSVGString({ whiteBg: white });
+    downloadText(svgString, "plot.svg", "image/svg+xml;charset=utf-8");
+  });
+
+  function collectStylesForSVG(){
+    // Collect inline <style> tags from <head>; strip root 'svg { width/height }' to avoid overriding size
+    let css = "";
+    document.querySelectorAll("head style").forEach(el => { css += (el.textContent || "") + "\n"; });
+    css = css.replace(/svg\s*\{[^}]*\}/g, ""); // remove width/height rule
+    return css;
+  }
+
+  function buildSVGString({ whiteBg = false } = {}){
+    const svgNode = document.getElementById("chart");
+    const clone = svgNode.cloneNode(true);
+    const NS = "http://www.w3.org/2000/svg";
+
+    // Inject styles
+    const defs = document.createElementNS(NS, "defs");
+    const styleEl = document.createElementNS(NS, "style");
+    styleEl.setAttribute("type", "text/css");
+    styleEl.textContent = collectStylesForSVG();
+    defs.appendChild(styleEl);
+    clone.insertBefore(defs, clone.firstChild);
+
+    // Compute size from viewBox
+    let vbW = 1200, vbH = 640;
+    const vbAttr = clone.getAttribute("viewBox");
+    if (vbAttr) {
+      const parts = vbAttr.trim().split(/\s+/).map(Number);
+      if (parts.length === 4) { vbW = parts[2]; vbH = parts[3]; }
+    }
+    clone.setAttribute("width", vbW);
+    clone.setAttribute("height", vbH);
+    clone.setAttribute("xmlns", NS);
+    clone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+
+    // Background rect (panel color or white)
+    const bg = document.createElementNS(NS, "rect");
+    bg.setAttribute("x","0"); bg.setAttribute("y","0");
+    bg.setAttribute("width", String(vbW)); bg.setAttribute("height", String(vbH));
+    const panel = getComputedStyle(svgNode).backgroundColor || "white";
+    bg.setAttribute("fill", whiteBg ? "#ffffff" : panel);
+    clone.insertBefore(bg, clone.children[1] || clone.firstChild);
+
+    const serializer = new XMLSerializer();
+    const svgString = serializer.serializeToString(clone);
+    return { svgString, width: vbW, height: vbH };
+  }
+
+  function exportPNG(scale = 2, whiteBg = false){
+    const { svgString, width: w, height: h } = buildSVGString({ whiteBg });
+    const blob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(w * scale);
+      canvas.height = Math.round(h * scale);
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((pngBlob) => {
+        if (pngBlob) downloadBlob(pngBlob, `plot_${scale}x.png`);
+        URL.revokeObjectURL(url);
+      });
+    };
+    img.src = url;
+  }
+
+  function downloadBlob(blob, filename){
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  }
+  function downloadText(text, filename, mime="text/plain"){
+    downloadBlob(new Blob([text], {type: mime}), filename);
+  }
+
+  // ---------- Save / Load workspace ----------
+  document.getElementById("saveWs").addEventListener("click", () => {
+    const ws = {
+      signature: graphSignature(graph),
+      graph: null,
+      view: { zoomMode, logMode, xDomain: xCur.domain(), yDomain: yCur.domain() },
+      selections: { edges: Array.from(selectedEdges), peaks: Array.from(selectedPeaks) },
+      annotations
+    };
+    downloadText(JSON.stringify(ws,null,2), "workspace.json", "application/json");
+  });
+
+  const fileInput = document.getElementById("loadWs");
+  document.getElementById("loadWsBtn").addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const txt = await f.text();
+    let ws;
+    try { ws = JSON.parse(txt); } catch { alert("Invalid JSON"); return; }
+    applyWorkspace(ws);
+  });
+
+  function applyWorkspace(ws){
+    if (ws.signature && ws.signature !== graphSignature(graph)) {
+      if (!confirm("Workspace signature differs from current graph. Load anyway?")) return;
+    }
+    if (ws.view) {
+      document.getElementById("zoomMode").value = ws.view.zoomMode || "x";
+      zoomMode = ws.view.zoomMode || "x";
+      document.getElementById("logY").checked = !!ws.view.logMode;
+      logMode = !!ws.view.logMode;
+      yBase = makeYScale(logMode).domain(ws.view.yDomain || yBase.domain());
+      yCur = yBase.copy();
+      if (ws.view.xDomain) {
+        xCur = d3.scaleLinear().domain(ws.view.xDomain).range([0, innerW]);
+      }
+    }
+    selectedEdges.clear();
+    (ws.selections?.edges || []).forEach(i => selectedEdges.add(i));
+    selectedPeaks.clear();
+    (ws.selections?.peaks || []).forEach(m => selectedPeaks.add(m));
+
+    if (ws.annotations) {
+      for (const k in ws.annotations.edges || {}) annotations.edges[k] = {...ws.annotations.edges[k]};
+      for (const k in ws.annotations.peaks || {}) annotations.peaks[k] = {...ws.annotations.peaks[k]};
+    }
+
+    withPreservedInputFocus(() => renderSidebar());
+    edgeLabels.text(d => edgeAA(d.__idx));
+    positionEdgeLabels();
+    renderAxes();
+    renderPeaksAndEdges();
+    renderPeakAnnotations();
+    updateSelectionStyling();
+  }
+
+  // ---- Rendering helpers ----
+  function makeYScale(log) {
+    return log
+      ? d3.scaleSymlog().domain([0, maxI * 1.08]).range([innerH, 0])
+      : d3.scaleLinear().domain([0, maxI * 1.08]).range([innerH, 0]).nice();
+  }
+
+  function renderAxes() {
+    xAxisG.call(d3.axisBottom(xCur));
+    yAxisG.call(d3.axisLeft(yCur).ticks(logMode ? 6 : 8));
+    const gy = d3.axisLeft(yCur).tickSize(-innerW).tickFormat("");
+    gGrid.call(gy);
+    gGrid.selectAll("line").attr("opacity", 0.15);
+  }
+
+  function renderPeaksAndEdges() {
+    peakLines
+      .attr("x1", d => xCur(d.mass))
+      .attr("x2", d => xCur(d.mass))
+      .attr("y1", yCur(0))
+      .attr("y2", d => yCur(d.intensity));
+
+    caps
+      .attr("cx", d => xCur(d.mass))
+      .attr("cy", d => yCur(d.intensity));
+
+    edgePaths.attr("d", edgePath);
+    positionEdgeLabels();
+  }
+
+  // Spread endpoints by degree: use full stick height when many edges per peak
+  function endpointYFor(mass, edgeIdx) {
+    const p = massToPeak.get(mass);
+    const yTop = yCur(p.intensity);
+    const yBot = yCur(0);
+    const arr = edgesAt.get(mass) || [];
+    if (arr.length <= 2) return yTop;
+    const i = arr.findIndex(o => o.idx === edgeIdx);
+    const frac = (arr.length <= 1) ? 0 : (i / (arr.length - 1));
+    const mTop = 2, mBot = 4;
+    const yMin = yTop + mTop;
+    const yMax = yBot - mBot;
+    return yMin + frac * (yMax - yMin);
+  }
+
+  const laneSpacing = 24;
+
+  function yLaneForEdge(d, y1, y2) {
+    const yLowerEnd = Math.max(y1, y2);
+    let yLane = yLowerEnd + laneSpacing * (d.lane + 1);
+    yLane = Math.min(yLane, innerH - 6);
+    return yLane;
+  }
+
+  function edgeCurveParams(d) {
+    const x1 = xCur(d.from_mass);
+    const x2 = xCur(d.to_mass);
+    const y1 = endpointYFor(d.from_mass, d.__idx);
+    const y2 = endpointYFor(d.to_mass, d.__idx);
+    const yc = yLaneForEdge(d, y1, y2);
+    return { x1, y1, x2, y2, yc };
+  }
+  function cubicAt(p0, p1, p2, p3, t) {
+    const mt = 1 - t;
+    return mt*mt*mt*p0 + 3*mt*mt*t*p1 + 3*mt*t*t*p2 + t*t*t*p3;
+  }
+  function edgeMidpoint(d) {
+    const {x1,y1,x2,y2,yc} = edgeCurveParams(d);
+    const t = 0.5;
+    const x = cubicAt(x1, x1, x2, x2, t);
+    const y = cubicAt(y1, yc, yc, y2, t);
+    return {x, y};
+  }
+
+  function edgePath(d) {
+    const {x1,y1,x2,y2,yc} = edgeCurveParams(d);
+    return `M ${x1} ${y1} C ${x1} ${yc}, ${x2} ${yc}, ${x2} ${y2}`;
+  }
+
+  function positionEdgeLabels() {
+    edgeLabels
+      .text(d => edgeAA(d.__idx))
+      .attr("x", d => edgeMidpoint(d).x)
+      .attr("y", d => edgeMidpoint(d).y - 6);
+
+    edgeNotes
+      .text(d => annotations.edges[d.__idx]?.note || "")
+      .attr("x", d => edgeMidpoint(d).x)
+      .attr("y", d => edgeMidpoint(d).y + 12)
+      .attr("display", d => annotations.edges[d.__idx]?.note ? null : "none");
+  }
+
+  function showTip(html, evt){ tooltip.html(html).style("opacity",1); moveTip(evt); }
+  function moveTip(evt){ tooltip.style("left", (evt.clientX)+"px").style("top",(evt.clientY)+"px"); }
+  function hideTip(){ tooltip.style("opacity",0); }
+
+  // ---- Selection, annotations, peptide ----
+  function toggleEdgeSelection(i){
+    if (selectedEdges.has(i)) selectedEdges.delete(i); else selectedEdges.add(i);
+    updateSelectionStyling();
+    renderSidebar();
+  }
+  function togglePeakSelection(mass){
+    if (selectedPeaks.has(mass)) selectedPeaks.delete(mass); else selectedPeaks.add(mass);
+    updateSelectionStyling();
+    renderSidebar();
+  }
+  function updateSelectionStyling(){
+    gEdges.selectAll("path.edge").classed("selected", (d) => selectedEdges.has(d.__idx));
+    edgeLabels.classed("selected", (d) => selectedEdges.has(d.__idx));
+  }
+
+  function edgeAA(i){ return annotations.edges[i]?.aa || graph.edges[i].label; }
+
+  function peptideFromSelectedEdges(){
+    if (selectedEdges.size === 0) return "–";
+    const arr = Array.from(selectedEdges).map(i => ({i, e: graph.edges[i]}));
+    arr.sort((a,b) => a.e.from_mass - b.e.from_mass);
+    let ok = true;
+    for (let k=1; k<arr.length; ++k) {
+      const prev = arr[k-1].e, cur = arr[k].e;
+      if (Math.abs(prev.to_mass - cur.from_mass) > 1e-6) { ok = false; break; }
+    }
+    const aaseq = arr.map(o => edgeAA(o.i)).join("");
+    return ok ? aaseq : aaseq + "  (non-contiguous)";
+  }
+
+  function renderSidebar(){
+    d3.select("#peptide").text(peptideFromSelectedEdges());
+
+    const se = d3.select("#selEdges").selectAll(".item").data(Array.from(selectedEdges).sort((a,b)=>a-b), d => d);
+    const seEnter = se.enter().append("div").attr("class","item");
+    seEnter.append("div").attr("class","left");
+    seEnter.append("div").attr("class","right");
+    const seAll = seEnter.merge(se);
+
+    seAll.select(".left").html(d => {
+      const e = graph.edges[d];
+      const delta = e.to_mass - e.from_mass;
+      const aa = edgeAA(d);
+      const note = annotations.edges[d]?.note;
+      return `<div><b>${aa}</b> &nbsp; [${e.from_mass.toFixed(4)} → ${e.to_mass.toFixed(4)}]  <span class="small">Δ=${delta.toFixed(4)}, v=${e.value}</span></div>` +
+             (note ? `<div class="small"><i>${escapeHtml(note)}</i></div>` : "");
+    });
+    seAll.select(".right").html(d => {
+      const anno = annotations.edges[d] || {};
+      const aa = anno.aa ?? graph.edges[d].label;
+      const note = anno.note ?? "";
+      return `
+        <div class="input-row">
+          <input id="edge-aa-${d}" type="text" placeholder="AA label" value="${escapeAttr(aa)}" oninput="window._setEdgeAA(${d}, this.value)" />
+          <input id="edge-note-${d}" type="text" placeholder="Note" value="${escapeAttr(note)}" oninput="window._setEdgeNote(${d}, this.value)" />
+          <button class="btn" onclick="window._toggleEdge(${d})">Unselect</button>
+        </div>`;
+    });
+    se.exit().remove();
+
+    d3.select("#seCount").text(`(${selectedEdges.size})`);
+
+    const spData = Array.from(selectedPeaks).sort((a,b)=>a-b);
+    const sp = d3.select("#selPeaks").selectAll(".item").data(spData, d => d);
+    const spEnter = sp.enter().append("div").attr("class","item");
+    spEnter.append("div").attr("class","left");
+    spEnter.append("div").attr("class","right");
+    const spAll = spEnter.merge(sp);
+
+    spAll.select(".left").html(m => {
+      const p = massToPeak.get(m);
+      const note = annotations.peaks[m]?.note;
+      return `<div><b>${p.label}</b> &nbsp; m/z=${p.mass.toFixed(4)} <span class="small">I=${p.intensity.toFixed(2)}</span></div>` +
+             (note ? `<div class="small"><i>${escapeHtml(note)}</i></div>` : "");
+    });
+    spAll.select(".right").html(m => {
+      const note = annotations.peaks[m]?.note ?? "";
+      return `
+        <div class="input-row">
+          <input id="peak-note-${m}" type="text" placeholder="Note" value="${escapeAttr(note)}" oninput="window._setPeakNote(${m}, this.value)" />
+          <button class="btn" onclick="window._togglePeak(${m})">Unselect</button>
+        </div>`;
+    });
+    sp.exit().remove();
+
+    d3.select("#spCount").text(`(${selectedPeaks.size})`);
+  }
+
+  function withPreservedInputFocus(fn) {
+    const el = document.activeElement;
+    const id = el && el.id;
+    let start, end;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
+      start = el.selectionStart; end = el.selectionEnd;
+    }
+    fn();
+    if (id) {
+      const ne = document.getElementById(id);
+      if (ne) {
+        ne.focus();
+        if (start != null && end != null) {
+          try { ne.setSelectionRange(start, end); } catch(_) {}
+        }
+      }
+    }
+  }
+
+  window._setEdgeAA   = (i, v) => { if (!annotations.edges[i]) annotations.edges[i] = {}; annotations.edges[i].aa = v;
+                                     edgeLabels.text(d => edgeAA(d.__idx)); withPreservedInputFocus(() => renderSidebar()); positionEdgeLabels(); };
+  window._setEdgeNote = (i, v) => { if (!annotations.edges[i]) annotations.edges[i] = {}; annotations.edges[i].note = v;
+                                     withPreservedInputFocus(() => renderSidebar()); positionEdgeLabels(); };
+  window._toggleEdge  = (i)     => { toggleEdgeSelection(i); };
+  window._setPeakNote = (m, v)  => { if (!annotations.peaks[m]) annotations.peaks[m] = {}; annotations.peaks[m].note = v;
+                                     withPreservedInputFocus(() => renderSidebar()); renderPeakAnnotations(); };
+  window._togglePeak  = (m)     => { togglePeakSelection(m); };
+
+  function renderPeakAnnotations(){
+    const entries = Object.entries(annotations.peaks).filter(([m, obj]) => obj && obj.note && selectedPeaks.has(+m));
+    const sel = gAnno.selectAll("text.peak-note").data(entries, d => d[0]);
+    sel.enter().append("text")
+        .attr("class","peak-note")
+        .attr("font-size","11px")
+        .attr("fill", "var(--muted)")
+      .merge(sel)
+        .attr("x", d => xCur(+d[0]) + 6)
+        .attr("y", d => {
+          const p = massToPeak.get(+d[0]);
+          return yCur(p.intensity) - 6;
+        })
+        .text(d => d[1].note);
+    sel.exit().remove();
+  }
+
+  // Initial render
+  renderPeaksAndEdges();
+  renderPeakAnnotations();
+  renderSidebar();
+
+  function escapeHtml(s){ return (s ?? "").toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function escapeAttr(s){ return escapeHtml(s).replace(/"/g, '&quot;'); }
+  function graphSignature(g){
+    const pk = g.peaks.map(p => `${p.mass}|${p.intensity}|${p.label}`).join(';');
+    const ed = g.edges.map(e => `${e.from_mass}|${e.to_mass}|${e.label}`).join(';');
+    let h=0; const str = pk+'#'+ed; for (let i=0;i<str.length;i++){ h = (h*31 + str.charCodeAt(i))|0; }
+    return h;
+  }
+  </script>
+</body>
+</html>

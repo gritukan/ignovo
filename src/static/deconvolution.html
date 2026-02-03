@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Deconvoluted Spectra Link Viewer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+:root{
+  --bg:#0b0f12; --panel:#11161c; --fg:#e6edf3; --muted:#9fb1c5;
+  --accent:#4ad3ff; --edge:#7aa5ff; --peak:#93a1a1;
+  --sel:#ffd166; --link:#66f2a3;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Helvetica,Arial}
+/* vertical layout */
+.layout{display:grid;grid-template-columns:1fr;gap:12px;padding:12px 16px 24px}
+.title{grid-column:1/-1;font-weight:600;font-size:14px;color:var(--muted);margin:6px 0 10px 6px}
+.frame{background:linear-gradient(180deg,rgba(255,255,255,.02),rgba(255,255,255,0));border:1px solid #1f2a35;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.05);padding:8px}
+.panel-title{color:var(--muted);font-size:12px;margin:2px 0 8px 6px}
+.controls{display:flex;gap:10px;align-items:center;margin:6px 0 8px 6px;flex-wrap:wrap}
+.btn{background:#1a2633;color:var(--fg);border:1px solid #263648;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px}
+.btn:hover{background:#203042}
+label{color:var(--muted);font-size:12px}
+input,select{background:#1a2633;color:var(--fg);border:1px solid #263648;border-radius:8px;padding:5px 8px;font-size:12px}
+svg{width:100%;height:520px;display:block;background:var(--panel);border-radius:10px}
+
+.axis path,.axis line{stroke:#314457}
+.axis text{fill:var(--muted);font-size:12px}
+.grid line{stroke:rgba(255,255,255,.07)}
+.peak{stroke:var(--peak);stroke-width:2px; stroke-linecap:round; vector-effect: non-scaling-stroke;}
+.cap{fill:var(--fg);pointer-events:none}
+.linked{stroke:var(--sel)!important;stroke-width:4px!important;filter:drop-shadow(0 0 6px rgba(255,209,102,.5))}
+.linked-cap{fill:var(--sel)!important}
+.linked-right{stroke:var(--link)!important;stroke-width:4px!important;filter:drop-shadow(0 0 6px rgba(102,242,163,.5))}
+.linked-right-cap{fill:var(--link)!important}
+.sel{stroke:var(--sel)!important;stroke-width:3.5px!important;filter:drop-shadow(0 0 6px rgba(255,209,102,.5))}
+.sel-cap{fill:var(--sel)!important}
+.tooltip{position:fixed;pointer-events:none;background:rgba(15,22,29,.96);color:var(--fg);border:1px solid #2a3a4b;padding:6px 8px;font-size:12px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.35);opacity:0;transform:translate(-50%,-120%);transition:opacity .08s ease-out;max-width:320px;white-space:nowrap}
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="title">Deconvoluted link viewer — hover to cross-highlight, click to select. Two-panel screenshot below.</div>
+
+  <!-- Global export controls -->
+  <div class="frame">
+    <div class="controls">
+      <span style="color:var(--muted);font-size:12px;">Export both:</span>
+      <button id="exportPNG" class="btn">PNG</button>
+      <button id="exportSVG" class="btn">SVG</button>
+      <label>Scale:
+        <select id="pngScale">
+          <option value="1">1×</option>
+          <option value="2" selected>2×</option>
+          <option value="3">3×</option>
+          <option value="4">4×</option>
+        </select>
+      </label>
+      <label><input id="whiteBg" type="checkbox"> White BG</label>
+    </div>
+  </div>
+
+  <div class="frame">
+    <div class="panel-title">Original spectrum</div>
+    <div class="controls">
+      <button id="resetL" class="btn">Reset</button>
+      <label><input id="logYL" type="checkbox"> Log Y</label>
+      <label>Zoom:
+        <select id="zoomModeL">
+          <option value="x" selected>X only</option>
+          <option value="xy">XY</option>
+          <option value="y">Y only</option>
+        </select>
+      </label>
+    </div>
+    <svg id="chartL" viewBox="0 0 1200 520" preserveAspectRatio="xMidYMid meet"></svg>
+  </div>
+
+  <div class="frame">
+    <div class="panel-title">Deconvoluted spectrum</div>
+    <div class="controls">
+      <button id="resetR" class="btn">Reset</button>
+      <label><input id="logYR" type="checkbox"> Log Y</label>
+      <label>Zoom:
+        <select id="zoomModeR">
+          <option value="x" selected>X only</option>
+          <option value="xy">XY</option>
+          <option value="y">Y only</option>
+        </select>
+      </label>
+      <label>Link tol (ppm): <input id="ppm" type="number" step="0.1" value="10" style="width:80px"></label>
+      <button id="applyPPM" class="btn">Apply</button>
+    </div>
+    <svg id="chartR" viewBox="0 0 1200 520" preserveAspectRatio="xMidYMid meet"></svg>
+  </div>
+</div>
+
+<div id="tooltip" class="tooltip"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script>
+const DATA = __DATA_JSON__;
+
+// --------- Helpers ----------
+const tt = d3.select("#tooltip");
+function tip(html, e){ tt.html(html).style("opacity",1); move(e); }
+function move(e){ tt.style("left",e.clientX+"px").style("top",e.clientY+"px"); }
+function hide(){ tt.style("opacity",0); }
+function fmt(x){ return (Math.abs(x) >= 100 ? x.toFixed(1) : x.toFixed(4)); }
+
+// Build a spectrum panel (returns API)
+function buildPanel(svgSel, peaks, {logInit=false, zoomModeInit="x"}={}){
+  const svg = d3.select(svgSel);
+  const width = 1200, height = 520;
+  const margin = {top: 24, right: 22, bottom: 36, left: 56};
+  const W = width - margin.left - margin.right;
+  const H = height - margin.top - margin.bottom;
+
+  const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+  g.append("clipPath").attr("id", svgSel.slice(1)+"-clip").append("rect").attr("width", W).attr("height", H);
+  const gGrid = g.append("g").attr("class","grid");
+  const gPeaks = g.append("g").attr("class","peaks").attr("clip-path", `url(${svgSel}-clip)`);
+  const xAxisG = g.append("g").attr("class","axis").attr("transform", `translate(0,${H})`);
+  const yAxisG = g.append("g").attr("class","axis");
+
+  peaks.forEach((p,i)=>p.__idx=i);
+
+  const masses = peaks.map(p=>p.mass);
+  const ints = peaks.map(p=>p.intensity);
+  const xBase = d3.scaleLinear().domain(d3.extent(masses)).range([0,W]).nice();
+  let yBase = (logInit?d3.scaleSymlog():d3.scaleLinear()).domain([0, (d3.max(ints)||1)*1.08]).range([H,0]).nice?.() || null;
+  let xCur = xBase.copy(), yCur = yBase.copy();
+
+  const lines = gPeaks.selectAll("line.peak").data(peaks).join("line").attr("class","peak");
+  const caps  = gPeaks.selectAll("circle.cap").data(peaks).join("circle").attr("class","cap").attr("r",3);
+
+  function renderAxes(){
+    xAxisG.call(d3.axisBottom(xCur));
+    yAxisG.call(d3.axisLeft(yCur).ticks(logInit?6:8));
+    gGrid.call(d3.axisLeft(yCur).tickSize(-W).tickFormat(""));
+    gGrid.selectAll("line").attr("opacity",0.15);
+  }
+  function renderPeaks(){
+    lines.attr("x1",d=>xCur(d.mass)).attr("x2",d=>xCur(d.mass)).attr("y1",yCur(0)).attr("y2",d=>yCur(d.intensity));
+    caps .attr("cx",d=>xCur(d.mass)).attr("cy",d=>yCur(d.intensity));
+  }
+
+  // zoom/pan
+  let zoomMode = zoomModeInit;
+  const zoom = d3.zoom().scaleExtent([1,1e8]).translateExtent([[-W*100, -H*100],[W*101,H*101]]).extent([[0,0],[W,H]])
+  .on("zoom", (ev)=>{
+    const t = ev.transform;
+    function rescaleXTranslateOnly(){
+      const x0 = xBase.invert(-t.x), x1 = xBase.invert(W - t.x);
+      return d3.scaleLinear().domain([x0,x1]).range([0,W]);
+    }
+    if(zoomMode==="xy"){ xCur=t.rescaleX(xBase); yCur=t.rescaleY(yBase); }
+    else if(zoomMode==="x"){ xCur=t.rescaleX(xBase); }
+    else { xCur=rescaleXTranslateOnly(); yCur=t.rescaleY(yBase); } // y-only
+    renderAxes(); renderPeaks(); if(onAfterRender) onAfterRender();
+  });
+  svg.call(zoom);
+
+  renderAxes(); renderPeaks();
+
+  // API
+  let onAfterRender = null;
+  return {
+    svg, gPeaks, lines, caps,
+    setLog(v){ logInit=v; const dom = yCur.domain(); yBase=(v?d3.scaleSymlog():d3.scaleLinear()).domain(dom).range([H,0]); yCur=yBase.copy(); renderAxes(); renderPeaks(); },
+    setZoomMode(z){ zoomMode=z; },
+    reset(){ xCur=xBase.copy(); yCur=yBase.copy(); svg.transition().duration(180).call(zoom.transform, d3.zoomIdentity);
+             renderAxes(); renderPeaks(); if(onAfterRender) onAfterRender(); },
+    highlight(indices, classLine, classCap){
+      const S = new Set(indices||[]);
+      lines.classed(classLine, d=>S.has(d.__idx)).filter(d=>S.has(d.__idx)).raise();
+      caps .classed(classCap,  d=>S.has(d.__idx)).filter(d=>S.has(d.__idx)).raise();
+    },
+    clearHighlight(classLine, classCap){
+      lines.classed(classLine,false);
+      caps .classed(classCap,false);
+    },
+    select(indices){
+      const S = new Set(indices||[]);
+      lines.classed("sel", d=>S.has(d.__idx)).filter(d=>S.has(d.__idx)).raise();
+      caps .classed("sel-cap", d=>S.has(d.__idx)).filter(d=>S.has(d.__idx)).raise();
+    },
+    clearSelect(){
+      lines.classed("sel", false);
+      caps .classed("sel-cap", false);
+    },
+    tipFor(d){ return `<b>${d.label}</b><br/>m/z: ${fmt(d.mass)}<br/>I: ${fmt(d.intensity)}`; },
+    onAfterRender(cb){ onAfterRender = cb; },
+    x:()=>xCur,y:()=>yCur, W, H, masses, peaks
+  };
+}
+
+// ---------- Build both panels (vertical) ----------
+const L = buildPanel("#chartL", DATA.original, {logInit:false, zoomModeInit:"x"});
+const R = buildPanel("#chartR", DATA.deconvoluted, {logInit:false, zoomModeInit:"x"});
+
+// ---------- Linking (ppm tolerance) ----------
+let ppmTol = 10;
+function ppmAbs(m){ return (ppmTol/1e6) * m; }
+
+const origSorted = [...L.peaks].sort((a,b)=>a.mass-b.mass);
+const origMasses = origSorted.map(p=>p.mass);
+
+let linksForDeconv = []; // R index -> [L idx]
+let reverseLinks   = []; // L index -> [R idx]
+
+function rebuildLinks(){
+  ppmTol = +document.getElementById("ppm").value || 10;
+  linksForDeconv = R.peaks.map(_=>[]);
+  reverseLinks   = L.peaks.map(_=>[]);
+  for (let j=0;j<R.peaks.length;j++){
+    const srcs = (R.peaks[j].sources_mz || []).map(Number);
+    for (const mz of srcs){
+      const absTol = Math.max(ppmAbs(mz), 0);
+      let k = d3.bisectLeft(origMasses, mz);
+      for (const q of [k-2,k-1,k,k+1,k+2]) {
+        if (q<0 || q>=origMasses.length) continue;
+        if (Math.abs(origMasses[q]-mz) <= absTol) {
+          const origIdx = origSorted[q].__idx;
+          if (!linksForDeconv[j].includes(origIdx)) linksForDeconv[j].push(origIdx);
+          if (!reverseLinks[origIdx].includes(j)) reverseLinks[origIdx].push(j);
+        }
+      }
+    }
+  }
+}
+rebuildLinks();
+
+// ---------- Selection state (persistent) ----------
+const selL_direct = new Set(); // user's explicit picks on left
+const selR_direct = new Set(); // user's explicit picks on right
+
+function computeEffectiveSelections(){
+  const effL = new Set(selL_direct);
+  const effR = new Set(selR_direct);
+  // R selections imply L
+  for (const j of selR_direct) for (const i of linksForDeconv[j]||[]) effL.add(i);
+  // L selections imply R
+  for (const i of selL_direct) for (const j of reverseLinks[i]||[]) effR.add(j);
+  return {effL, effR};
+}
+function applySelections(){
+  const {effL, effR} = computeEffectiveSelections();
+  L.clearSelect(); R.clearSelect();
+  L.select([...effL]); R.select([...effR]);
+}
+
+// ---------- Hover & cross-highlight ----------
+function clearHover(){
+  L.clearHighlight("linked","linked-cap");
+  R.clearHighlight("linked-right","linked-right-cap");
+}
+function highlightFromDeconv(j){
+  L.highlight(linksForDeconv[j], "linked", "linked-cap");
+  R.highlight([j], "linked-right", "linked-right-cap");
+}
+function highlightFromOrig(i){
+  R.highlight(reverseLinks[i], "linked-right", "linked-right-cap");
+  L.highlight([i], "linked", "linked-cap");
+}
+
+// Hover
+R.caps.on("mouseenter", (ev,d)=>{ tip(R.tipFor(d), ev); highlightFromDeconv(d.__idx); })
+      .on("mousemove", move).on("mouseleave", ()=>{ hide(); clearHover(); });
+R.lines.on("mouseenter", (ev,d)=>{ tip(R.tipFor(d), ev); highlightFromDeconv(d.__idx); })
+      .on("mousemove", move).on("mouseleave", ()=>{ hide(); clearHover(); });
+
+L.caps.on("mouseenter", (ev,d)=>{ tip(L.tipFor(d), ev); highlightFromOrig(d.__idx); })
+      .on("mousemove", move).on("mouseleave", ()=>{ hide(); clearHover(); });
+L.lines.on("mouseenter", (ev,d)=>{ tip(L.tipFor(d), ev); highlightFromOrig(d.__idx); })
+      .on("mousemove", move).on("mouseleave", ()=>{ hide(); clearHover(); });
+
+// Click to toggle selection (persistent)
+R.caps.on("click", (ev,d)=>{ toggleR(d.__idx); ev.stopPropagation(); });
+R.lines.on("click", (ev,d)=>{ toggleR(d.__idx); ev.stopPropagation(); });
+L.caps.on("click", (ev,d)=>{ toggleL(d.__idx); ev.stopPropagation(); });
+L.lines.on("click", (ev,d)=>{ toggleL(d.__idx); ev.stopPropagation(); });
+
+function toggleL(i){
+  if (selL_direct.has(i)) selL_direct.delete(i); else selL_direct.add(i);
+  applySelections();
+}
+function toggleR(j){
+  if (selR_direct.has(j)) selR_direct.delete(j); else selR_direct.add(j);
+  applySelections();
+}
+
+// keep highlights correct after zoom/pan redraw
+L.onAfterRender(()=>{ /* raising handled in class functions */ });
+R.onAfterRender(()=>{ /* raising handled in class functions */ });
+
+// ---------- UI wiring ----------
+document.getElementById("logYL").addEventListener("change", e=>L.setLog(e.target.checked));
+document.getElementById("logYR").addEventListener("change", e=>R.setLog(e.target.checked));
+document.getElementById("zoomModeL").addEventListener("change", e=>L.setZoomMode(e.target.value));
+document.getElementById("zoomModeR").addEventListener("change", e=>R.setZoomMode(e.target.value));
+document.getElementById("resetL").addEventListener("click", ()=>{ L.reset(); clearHover(); });
+document.getElementById("resetR").addEventListener("click", ()=>{ R.reset(); clearHover(); });
+document.getElementById("applyPPM").addEventListener("click", ()=>{ rebuildLinks(); clearHover(); applySelections(); hide(); });
+
+// ---------- Combined export (both panels) ----------
+document.getElementById("exportPNG").addEventListener("click", () => {
+  const scale = parseFloat(document.getElementById("pngScale").value || "2");
+  const white = document.getElementById("whiteBg").checked;
+  exportCombinedPNG(scale, white);
+});
+document.getElementById("exportSVG").addEventListener("click", () => {
+  const white = document.getElementById("whiteBg").checked;
+  const { svgString } = buildCombinedSVG({ whiteBg: white });
+  downloadText(svgString, "deconv_both.svg", "image/svg+xml;charset=utf-8");
+});
+
+function collectHeadStyles(){
+  let css = "";
+  document.querySelectorAll("head style").forEach(el => { css += (el.textContent || "") + "\n"; });
+  css = css.replace(/svg\s*\{[^}]*\}/g, ""); // avoid hard width/height overrides
+  return css;
+}
+function buildCombinedSVG({ whiteBg=false }={}){
+  const NS = "http://www.w3.org/2000/svg";
+  const sL = document.getElementById("chartL");
+  const sR = document.getElementById("chartR");
+  const cL = sL.cloneNode(true);
+  const cR = sR.cloneNode(true);
+
+  // sizes from viewBox
+  function vb(svg){ const v = (svg.getAttribute("viewBox")||"0 0 1200 520").split(/\s+/).map(Number); return {w:v[2], h:v[3]}; }
+  const {w:wL, h:hL} = vb(sL), {w:wR, h:hR} = vb(sR);
+  const gap = 24;
+  const W = Math.max(wL, wR), H = hL + gap + hR;
+
+  const root = document.createElementNS(NS, "svg");
+  root.setAttribute("xmlns", NS);
+  root.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+  root.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  root.setAttribute("width", W);
+  root.setAttribute("height", H);
+
+  const defs = document.createElementNS(NS, "defs");
+  const styleEl = document.createElementNS(NS, "style");
+  styleEl.setAttribute("type","text/css");
+  styleEl.textContent = collectHeadStyles();
+  defs.appendChild(styleEl);
+  root.appendChild(defs);
+
+  // bg
+  const bg = document.createElementNS(NS, "rect");
+  bg.setAttribute("x","0"); bg.setAttribute("y","0");
+  bg.setAttribute("width", String(W)); bg.setAttribute("height", String(H));
+  bg.setAttribute("fill", whiteBg ? "#ffffff" : getComputedStyle(sL).backgroundColor || "#11161c");
+  root.appendChild(bg);
+
+  // place clones (translate top/second)
+  const g1 = document.createElementNS(NS, "g");
+  g1.setAttribute("transform", "translate(0,0)");
+  g1.appendChild(cL);
+  const g2 = document.createElementNS(NS, "g");
+  g2.setAttribute("transform", `translate(0,${hL + gap})`);
+  g2.appendChild(cR);
+  root.appendChild(g1); root.appendChild(g2);
+
+  const serializer = new XMLSerializer();
+  const svgString = serializer.serializeToString(root);
+  return { svgString, width: W, height: H };
+}
+function exportCombinedPNG(scale=2, whiteBg=false){
+  const { svgString, width: W, height: H } = buildCombinedSVG({ whiteBg });
+  const blob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(W * scale);
+    canvas.height = Math.round(H * scale);
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob((pngBlob) => {
+      if (pngBlob) downloadBlob(pngBlob, `deconv_both_${scale}x.png`);
+      URL.revokeObjectURL(url);
+    });
+  };
+  img.src = url;
+}
+function downloadBlob(blob, filename){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+function downloadText(text, filename, mime="text/plain"){
+  downloadBlob(new Blob([text], {type: mime}), filename);
+}
+</script>
+</body>
+</html>
