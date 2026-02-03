@@ -13,6 +13,15 @@ pub struct Peak {
     pub label: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeconvolutedPeak {
+    pub mass: f64,
+    pub intensity: f64,
+    pub label: String,
+    /// list of original m/z that contributed to this deconvoluted peak
+    pub sources_mz: Vec<f64>,
+}
+
 /// Edge between two peaks (mass -> mass), `value` is an arbitrary score/weight
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Edge {
@@ -40,8 +49,15 @@ struct GraphOut {
     edges: Vec<EdgeOut>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct DeconvolutionOut {
+    original: Vec<Peak>,
+    deconvoluted: Vec<DeconvolutedPeak>,
+}
+
 // compile-time embed the HTML file:
-const INLINE_TEMPLATE: &str = include_str!("static/novoviz.html");
+const GRAPH_TEMPLATE: &str = include_str!("static/graph.html");
+const DECONVOLUTION_TEMPLATE: &str = include_str!("static/deconvolution.html");
 
 /// Generate the graph visualization HTML.
 pub fn graph_html(mut peaks: Vec<Peak>, mut edges: Vec<Edge>) -> String {
@@ -72,7 +88,7 @@ pub fn graph_html(mut peaks: Vec<Peak>, mut edges: Vec<Edge>) -> String {
     let graph = GraphOut { peaks, edges: edges_out };
 
     // Build HTML by injecting JSON into template
-    let tpl = INLINE_TEMPLATE;
+    let tpl = GRAPH_TEMPLATE;
     let json = serde_json::to_string_pretty(&graph).unwrap();
     let html = tpl.replace("__GRAPH_JSON__", &json);
     html
@@ -135,3 +151,18 @@ fn overlaps_any(start: f64, end: f64, lane: &Vec<(f64, f64)>) -> bool {
     }
     false
 }
+
+pub fn deconvolution_html(
+    original_peaks: Vec<Peak>,
+    deconvoluted_peaks: Vec<DeconvolutedPeak>,
+) -> String {
+    let deconv = DeconvolutionOut {
+        original: original_peaks,
+        deconvoluted: deconvoluted_peaks,
+    };
+    let tpl = DECONVOLUTION_TEMPLATE;
+    let json = serde_json::to_string_pretty(&deconv).unwrap();
+    let html = tpl.replace("__DATA_JSON__", &json);
+    html
+}
+

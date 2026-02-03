@@ -167,6 +167,11 @@ pub struct DeconvolutedPeak {
     pub intensity: f64,
     /// Score represents confidence of the deconvolution of the peak.
     pub score: f64,
+    /// Charge of the original peak
+    pub charge: i32,
+    /// How many additional neutrons does original peak have
+    /// compared to the monoisotopic mass.
+    pub neutrons: i32,
 }
 
 /// Represents a deconvoluted peak with possible ambiguities.
@@ -178,6 +183,9 @@ pub struct AmbiguousPeak {
     pub variants: Vec<DeconvolutedPeak>,
     /// The peak from the original spectrum that this deconvoluted peak corresponds to.
     pub original_peak: MZPoint,
+    /// All peaks (including isotopic peaks) from the original spectrum that
+    /// this deconvoluted peak corresponds to.
+    pub original_peaks: Vec<MZPoint>,
 }
 
 /// Tolerance that is used during deconvolution.
@@ -319,11 +327,17 @@ pub fn none_deconvolute(spectrum: &MultiLayerSpectrum, config: &NoneDeconvolutio
             mass_tolerance: config.tolerance.tolerance_at(peak.mz),
             intensity: peak.intensity as f64,
             score: config.intensity_scoring.score(peak.intensity as f64, max_intensity),
+            charge: 1,
+            neutrons: 0,
         }, ],
         original_peak: MZPoint {
             mz: peak.mz,
             intensity: peak.intensity,
-        } 
+        },
+        original_peaks: vec![ MZPoint {
+            mz: peak.mz,
+            intensity: peak.intensity,
+        }, ],
     }).collect::<Vec<_>>()
 }
 
@@ -642,13 +656,23 @@ fn greedy_deconvolute(spectrum: &MultiLayerSpectrum, config: &GreedyDeconvolutio
                     mass_tolerance,
                     intensity: candidate.intensity,
                     score: -neutrons_error * config.isotope_error_penalty,
+                    charge,
+                    neutrons,
                 });
             }
         }
 
+        let original_peaks = candidate.profile.iter()
+            .filter_map(|&idx_opt| idx_opt.map(|idx| MZPoint {
+                mz: peaks[idx].mz,
+                intensity: peaks[idx].intensity,
+            }))
+            .collect::<Vec<_>>();
+
         final_peaks.push(AmbiguousPeak {
             variants: candidate_peaks,
             original_peak: peak.clone(),
+            original_peaks,
         });
     }
 
@@ -723,6 +747,8 @@ fn greedy_deconvolute(spectrum: &MultiLayerSpectrum, config: &GreedyDeconvolutio
     if let Some(max_peaks) = config.max_peaks {
         final_peaks.truncate(max_peaks);
     }
+
+    dbg!(final_peaks.len());
 
     final_peaks
 }

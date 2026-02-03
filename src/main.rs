@@ -4,16 +4,18 @@ mod deconvolution;
 mod novoviz;
 mod align;
 
-use std::fs;
+use std::{fs, io};
 use std::path::PathBuf;
 
 use clap::{arg, Parser};
 
-use mzdata::io::MZFileReader;
-use mzdata::MZReader;
+use mzdata::io::{MZFileReader, SpectrumWriter};
+use mzdata::mzpeaks::{CentroidPeak, MZPeakSetType};
+use mzdata::prelude::SpectrumLike;
+use mzdata::{MZReader, MzMLWriter};
 use mzdata::spectrum::MultiLayerSpectrum;
 
-use serde::de::DeserializeOwned;
+use serde::de::{self, DeserializeOwned};
 use serde::Deserialize;
 
 use crate::deconvolution::{deconvolute, AmbiguousPeak, DeconvolutionConfig};
@@ -94,6 +96,38 @@ fn visualize_graph(graph: &graph::Graph, deconvoluted_spectrum: &[AmbiguousPeak]
 }
 
 #[derive(Debug, Deserialize)]
+pub struct DeconvolutionVisualizationConfig {
+    output_html_path: String,
+}
+
+fn visualize_deconvolution(original_spectrum: &MultiLayerSpectrum, deconvoluted_spectrum: &[AmbiguousPeak], config: &DeconvolutionVisualizationConfig) {
+    let mut viz_original_peaks = vec![];
+    let mut viz_deconvoluted_peaks = vec![];
+    for peak in original_spectrum.peaks().iter() {
+        let viz_peak = novoviz::Peak {
+            mass: peak.mz as f64,
+            intensity: peak.intensity as f64,
+            label: format!("m/z: {:.4}\nIntensity: {:.2}", peak.mz, peak.intensity),
+        };
+        viz_original_peaks.push(viz_peak);
+    }
+    for peak in deconvoluted_spectrum {
+        for variant in &peak.variants {
+            let viz_peak = novoviz::DeconvolutedPeak {
+                mass: variant.mass,
+                intensity: variant.intensity,
+                label: format!("Mass: {:.4}\nIntensity: {:.2}\nCharge: {}\nNeutrons: {}", variant.mass, variant.intensity, variant.charge, variant.neutrons),
+                sources_mz: peak.original_peaks.iter().map(|p| p.mz).collect(),
+            };
+            viz_deconvoluted_peaks.push(viz_peak);
+        }
+    }
+
+    let html = novoviz::deconvolution_html(viz_original_peaks, viz_deconvoluted_peaks);
+    std::fs::write(&config.output_html_path, html).unwrap();
+}
+
+#[derive(Debug, Deserialize)]
 pub struct PeptidePrintingConfig { }
 
 fn print_peptides(peptide_paths: &[peptide_search::Path], _config: &PeptidePrintingConfig) {
@@ -126,11 +160,20 @@ fn print_alignments(alignments: &align::AlignmentResults, _: &AlignmentsPrinting
 }
 
 #[derive(Debug, Deserialize)]
+pub struct SaveDeconvolutedSpectrumConfig {
+    output_path: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct AppConfig {
     input: InputConfig,
 
     #[serde(default = "default_deconvolution_config")]
     deconvolution: DeconvolutionConfig,
+
+    visualize_deconvolution: Option<DeconvolutionVisualizationConfig>,
+
+    save_deconvoluted_spectrum: Option<SaveDeconvolutedSpectrumConfig>,
 
     #[serde(default = "default_graph_building_config")]
     build_graph: GraphBuildingConfig,
@@ -190,13 +233,63 @@ fn load_config() -> AppConfig {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = load_config();
 
-    let spectrum = get_spectrum(&config.input)?;
+    let mut spectrum = get_spectrum(&config.input)?;
+    // TODO: move it somewhere else, it is here just for deconvolution visualization
+    if spectrum.signal_continuity() != mzdata::spectrum::SignalContinuity::Centroid {
+        spectrum.pick_peaks(3.0).unwrap();
+    }
+
     let deconvoluted_spectrum = deconvolute(&spectrum, &config.deconvolution);
+
+    if let Some(viz_config) = &config.visualize_deconvolution {
+        visualize_deconvolution(&spectrum, &deconvoluted_spectrum, viz_config);
+    }
 
     let graph = build_graph(&deconvoluted_spectrum, &config.build_graph);
 
     if let Some(viz_config) = &config.visualize_graph {
         visualize_graph(&graph, &deconvoluted_spectrum, viz_config);
+    }
+
+    if let Some(save_config) = &config.save_deconvoluted_spectrum {
+        let mut writer = MzMLWriter::new(io::BufWriter::new(fs::File::create(&save_config.output_path)?));
+
+        let spectrum_description = mzdata::spectrum::SpectrumDescription {
+            id: "BlahBlahBlah".to_string(),
+            index: 0,
+            ms_level: 1,
+            polarity: mzdata::spectrum::ScanPolarity::Positive,
+            signal_continuity: mzdata::spectrum::SignalContinuity::Centroid,
+            params: vec![],
+            acquisition: mzdata::spectrum::Acquisition {
+                scans: vec![],
+                combination: mzdata::spectrum::ScanCombination::NoCombination,
+                params: None,
+            },
+            precursor: vec![],
+        };
+
+        let peaks: Vec<CentroidPeak> = deconvoluted_spectrum
+            .iter()
+            .enumerate()
+            .map(|(i, peak)| CentroidPeak {
+                mz: peak.variants[0].mass,
+                intensity: peak.variants[0].intensity as f32,
+                index: i as u32,
+            })
+            .collect();
+        let peaks = MZPeakSetType::<CentroidPeak>::new(peaks);
+
+        let spectrum = mzdata::Spectrum {
+            description: spectrum_description,
+            arrays: None,
+            peaks: Some(peaks),
+            deconvoluted_peaks: None,
+        };
+
+        writer.write_spectrum(&spectrum)?;
+
+        writer.close()?;
     }
 
     let mut peptide_paths = None;
